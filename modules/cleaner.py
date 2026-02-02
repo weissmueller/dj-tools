@@ -13,8 +13,18 @@ class CleanModule:
         self.duplicate_count = 0
         self.wasted_size = 0
 
+    def _get_creation_time(self, path):
+        """Returns file creation time (st_birthtime on Mac, ctime on others)."""
+        try:
+            stat = os.stat(path)
+            if hasattr(stat, 'st_birthtime'):
+                return stat.st_birthtime
+            return stat.st_ctime
+        except OSError:
+            return 0
+
     def scan(self, root_path):
-        """Recursively scans files and finds duplicates based on hash."""
+        """Recursively scans files and finds duplicates based on hash, keeping the oldest file."""
         self.duplicates.clear()
         self.file_count = 0
         hashes = {}
@@ -36,9 +46,24 @@ class CleanModule:
                         size = os.path.getsize(file_path)
                         
                         if file_hash in hashes:
-                            self.duplicates[file_hash].append(file_path)
+                            # Collision found! Compare dates to decide who stays.
+                            keeper_path = hashes[file_hash]
+                            
+                            keeper_time = self._get_creation_time(keeper_path)
+                            current_time = self._get_creation_time(file_path)
+                            
+                            if current_time < keeper_time:
+                                # Current file is OLDER (smaller timestamp). It becomes the new Keeper.
+                                # The old keeper becomes the duplicate (trash).
+                                self.duplicates[file_hash].append(keeper_path)
+                                hashes[file_hash] = file_path # Update keeper (map hash to NEW keeper)
+                                self.wasted_size += os.path.getsize(keeper_path)
+                            else:
+                                # Current file is NEWER (or same). It is the duplicate.
+                                self.duplicates[file_hash].append(file_path)
+                                self.wasted_size += size
+
                             self.duplicate_count += 1
-                            self.wasted_size += size
                         else:
                             hashes[file_hash] = file_path
                         
@@ -49,7 +74,7 @@ class CleanModule:
     
     
     def quick_scan(self, root_path):
-        """Scans for duplicates based on normalized filenames (ignoring prefixes)."""
+        """Scans for names based on normalized filenames, keeping the oldest file."""
         import re
         self.duplicates.clear()
         self.file_count = 0
@@ -58,7 +83,7 @@ class CleanModule:
         
         # Regex to strip "01 - " style prefixes
         pattern = re.compile(r"^\d+\s*-\s*")
-        seen_names = {} # normalized_name -> original_path
+        seen_names = {} # normalized_name -> original_path (The KEEPER)
         
         files_to_check = []
         for root, _, files in os.walk(root_path):
@@ -69,7 +94,6 @@ class CleanModule:
             
             for root, file in files_to_check:
                 file_path = os.path.join(root, file)
-                size = os.path.getsize(file_path)
                 
                 # Normalize name
                 match = pattern.match(file)
@@ -81,8 +105,22 @@ class CleanModule:
                 norm_name = norm_name.lower()
                 
                 if norm_name in seen_names:
-                    # Found duplicate by name
-                    self.duplicates[norm_name].append(file_path)
+                    # Collision
+                    keeper_path = seen_names[norm_name]
+                    
+                    keeper_time = self._get_creation_time(keeper_path)
+                    current_time = self._get_creation_time(file_path)
+                    
+                    if current_time < keeper_time:
+                        # Current is Older -> Kick out old keeper
+                        self.duplicates[norm_name].append(keeper_path)
+                        seen_names[norm_name] = file_path
+                        size = os.path.getsize(keeper_path)
+                    else:
+                        # Current is Newer -> Trash it
+                        self.duplicates[norm_name].append(file_path)
+                        size = os.path.getsize(file_path)
+
                     self.duplicate_count += 1
                     self.wasted_size += size
                 else:

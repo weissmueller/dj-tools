@@ -2,3 +2,5 @@
 /_test_env
 /corrupt_files_report.csv
 /verify.py
+user-notes.md
+.last_root

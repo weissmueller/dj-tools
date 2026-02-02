@@ -28,12 +28,39 @@ def print_header(root_path):
 
 def get_root_path(args):
     if args.root:
+        _save_last_root(args.root)
         return args.root
+        
+    # Check for last used path
+    last_root_file = ".last_root"
+    if os.path.exists(last_root_file):
+        try:
+            with open(last_root_file, "r") as f:
+                last_path = f.read().strip()
+            if os.path.exists(last_path):
+                 if Confirm.ask(f"Use last session's root? [cyan]({last_path})[/cyan]", default=True):
+                     return last_path
+        except:
+            pass
+
     # Default to current directory or ask
     path = os.getcwd()
-    if Confirm.ask(f"Use current directory as root? ({path})", default=True):
+    if Confirm.ask(f"Use current directory as root? ({path})", default=False):
+        # Note: defaulted to False now since user likely has a specific external drive
+        _save_last_root(path)
         return path
-    return Prompt.ask("Enter root path").strip().strip("'").strip('"')
+        
+    path = Prompt.ask("Enter root path").strip().strip("'").strip('"')
+    if os.path.exists(path):
+        _save_last_root(path)
+    return path
+
+def _save_last_root(path):
+    try:
+        with open(".last_root", "w") as f:
+            f.write(path)
+    except:
+        pass
 
 def run_cleaner(root_path, dry_run=False):
     console.print("[bold blue]== Module A: Interactive Cleaner ==[/bold blue]")
@@ -123,7 +150,12 @@ def run_doctor(root_path, dry_run=False):
 
 def run_matcher(root_path, dry_run=False):
     console.print("[bold blue]== Module C: Matchmaker ==[/bold blue]")
-    csv_path = Prompt.ask("Path to Exportify CSV").strip().strip("'").strip('"') # Clean quotes from drag&drop
+    
+    console.print("[bold blue]== Module C: Matchmaker ==[/bold blue]")
+    
+    csv_path = _select_csv()
+    if not csv_path:
+        return
     
     if not os.path.exists(csv_path):
         console.print("[red]File not found![/red]")
@@ -191,6 +223,44 @@ def run_renamer(root_path, dry_run=False):
         for res in results:
             console.print(res)
 
+def _select_csv():
+    # Auto-discover CSVs in Downloads
+    downloads_path = os.path.expanduser("~/Downloads")
+    csv_choices = []
+    
+    if os.path.exists(downloads_path):
+        import glob
+        files = glob.glob(os.path.join(downloads_path, "*.csv"))
+        files.sort(key=os.path.getmtime, reverse=True)
+        for f in files[:10]:
+            csv_choices.append(f)
+            
+    choices = csv_choices + ["Enter path manually..."]
+    
+    selection = questionary.select("Select Exportify CSV:", choices=choices).ask()
+    
+    if selection == "Enter path manually...":
+        return Prompt.ask("Path to Exportify CSV").strip().strip("'").strip('"')
+    return selection
+
+def run_deduplicator(root_path, dry_run=False):
+    console.print("[bold blue]== Module E: CSV Deduplicator ==[/bold blue]")
+    
+    csv_path = _select_csv()
+    if not csv_path: 
+        return
+
+    matcher = MatchMaker(dry_run=dry_run)
+    # The message includes the path, so we don't need to print it again unless we want to be explicit
+    result = matcher.deduplicate_csv(csv_path, root_path)
+    
+    if "error" in result:
+        console.print(f"[bold red]Error:[/bold red] {result['error']}")
+    else:
+        console.print(f"[green]{result['message']}[/green]")
+        if result['path']:
+             console.print(f"Saved to: [bold]{result['path']}[/bold]")
+
 def main():
     parser = argparse.ArgumentParser(description="DJ Library Manager")
     parser.add_argument("--root", help="Root directory of music library")
@@ -214,7 +284,8 @@ def main():
                 "2) Health Check (FLAC)",
                 "3) Playlist Sync (CSV to M3U)",
                 "4) Prefix Remover (01 - Song.mp3 -> Song.mp3)",
-                "5) Full Auto-Mode (Run 1, 2, 3)",
+                "5) CSV Deduplicator (Remove owned tracks from CSV)",
+                "6) Full Auto-Mode (Run 1, 2, 3)",
                 "q) Quit"
             ]
         ).ask()
@@ -228,6 +299,8 @@ def main():
         elif choice.startswith("4)"):
             run_renamer(root_path, args.dry_run)
         elif choice.startswith("5)"):
+            run_deduplicator(root_path, args.dry_run)
+        elif choice.startswith("6)"):
             run_cleaner(root_path, args.dry_run)
             run_doctor(root_path, args.dry_run)
             run_matcher(root_path, args.dry_run)
