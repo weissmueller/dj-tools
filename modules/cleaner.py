@@ -1,0 +1,149 @@
+import os
+import hashlib
+import shutil
+from collections import defaultdict
+from pathlib import Path
+from rich.progress import Progress
+
+class CleanModule:
+    def __init__(self, dry_run=False):
+        self.dry_run = dry_run
+        self.duplicates = defaultdict(list)
+        self.file_count = 0
+        self.duplicate_count = 0
+        self.wasted_size = 0
+
+    def scan(self, root_path):
+        """Recursively scans files and finds duplicates based on hash."""
+        self.duplicates.clear()
+        self.file_count = 0
+        hashes = {}
+        
+        # Count files first for progress bar
+        total_files = sum([len(files) for r, d, files in os.walk(root_path)])
+        
+        with Progress() as progress:
+            task = progress.add_task("[cyan]Scanning files...", total=total_files)
+            
+            for root, _, files in os.walk(root_path):
+                for file in files:
+                    if file.startswith('.'):
+                        continue
+                        
+                    file_path = os.path.join(root, file)
+                    try:
+                        file_hash = self._get_file_hash(file_path)
+                        size = os.path.getsize(file_path)
+                        
+                        if file_hash in hashes:
+                            self.duplicates[file_hash].append(file_path)
+                            self.duplicate_count += 1
+                            self.wasted_size += size
+                        else:
+                            hashes[file_hash] = file_path
+                        
+                        self.file_count += 1
+                        progress.advance(task)
+                    except (OSError, PermissionError):
+                        continue
+    
+    
+    def quick_scan(self, root_path):
+        """Scans for duplicates based on normalized filenames (ignoring prefixes)."""
+        import re
+        self.duplicates.clear()
+        self.file_count = 0
+        self.duplicate_count = 0
+        self.wasted_size = 0
+        
+        # Regex to strip "01 - " style prefixes
+        pattern = re.compile(r"^\d+\s*-\s*")
+        seen_names = {} # normalized_name -> original_path
+        
+        files_to_check = []
+        for root, _, files in os.walk(root_path):
+            files_to_check.extend([(root, f) for f in files if not f.startswith('.')])
+            
+        with Progress() as progress:
+            task = progress.add_task("[cyan]Quick scanning filenames...", total=len(files_to_check))
+            
+            for root, file in files_to_check:
+                file_path = os.path.join(root, file)
+                size = os.path.getsize(file_path)
+                
+                # Normalize name
+                match = pattern.match(file)
+                if match:
+                    norm_name = file[len(match.group(0)):]
+                else:
+                    norm_name = file
+                
+                norm_name = norm_name.lower()
+                
+                if norm_name in seen_names:
+                    # Found duplicate by name
+                    self.duplicates[norm_name].append(file_path)
+                    self.duplicate_count += 1
+                    self.wasted_size += size
+                else:
+                    seen_names[norm_name] = file_path
+                
+                self.file_count += 1
+                progress.advance(task)
+
+    def _get_file_hash(self, file_path, block_size=65536):
+        """Calculates SHA-256 hash of a file."""
+        sha256 = hashlib.sha256()
+        with open(file_path, 'rb') as f:
+            for block in iter(lambda: f.read(block_size), b''):
+                sha256.update(block)
+        return sha256.hexdigest()
+
+    def report(self):
+        """Returns a summary of the scan."""
+        return {
+            "total_files": self.file_count,
+            "duplicates": self.duplicate_count,
+            "wasted_size_mb": self.wasted_size / (1024 * 1024)
+        }
+
+    def deduplicate(self, mode, root_path):
+        """
+        Executes deduplication based on mode.
+        mode: 'delete' or 'move'
+        """
+        trash_dir = os.path.join(root_path, "_DUPLICATES_TRASH")
+        if mode == 'move' and not os.path.exists(trash_dir):
+            os.makedirs(trash_dir, exist_ok=True)
+            
+        results = []
+        
+        for file_hash, paths in self.duplicates.items():
+            for file_path in paths:
+                # 'paths' contains ONLY the duplicates (2nd, 3rd occurrence etc.)
+                # Verify this logic: 
+                # In scan: if file_hash in hashes -> self.duplicates[file_hash].append(file_path)
+                # Yes, so the first file found is NOT in self.duplicates[file_hash].
+                
+                action = "Deleted" if mode == 'delete' else "Moved"
+                
+                if self.dry_run:
+                    results.append(f"[DRY-RUN] Would {action}: {file_path}")
+                    continue
+                    
+                try:
+                    if mode == 'delete':
+                        os.remove(file_path)
+                        results.append(f"Deleted: {file_path}")
+                    elif mode == 'move':
+                        dest = os.path.join(trash_dir, os.path.basename(file_path))
+                        # Handle name collision in trash
+                        if os.path.exists(dest):
+                            base, ext = os.path.splitext(dest)
+                            dest = f"{base}_{file_hash[:8]}{ext}"
+                        shutil.move(file_path, dest)
+                        results.append(f"Moved: {file_path} -> {dest}")
+                except Exception as e:
+                    results.append(f"[ERROR] Failed to {action} {file_path}: {e}")
+                    
+        return results

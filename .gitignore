@@ -1,0 +1,4 @@
+/.venv
+/_test_env
+/corrupt_files_report.csv
+/verify.py

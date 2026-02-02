@@ -1,0 +1,6 @@
+rich
+questionary
+pandas
+thefuzz
+soundfile
+types-requests
