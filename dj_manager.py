@@ -73,6 +73,9 @@ def run_cleaner(root_path, dry_run=False):
         ]
     ).ask()
     
+    if mode is None:
+        return
+    
     cleaner = CleanModule(dry_run=dry_run)
     
     if mode.startswith("1."):
@@ -93,7 +96,7 @@ def run_cleaner(root_path, dry_run=False):
     action = questionary.select(
         "How do you want to handle duplicates?",
         choices=[
-            "a) Delete (Keep first found, delete others)",
+            "a) Delete (Keep oldest file, delete newer duplicates)",
             "b) Move to /_DUPLICATES_TRASH",
             "c) Just show report",
             "d) Cancel"
@@ -187,7 +190,11 @@ def run_matcher(root_path, dry_run=False):
     if found > 0:
         if Confirm.ask("Save M3U8 playlist?"):
             # Default name based on CSV filename
-            default_name = os.path.splitext(os.path.basename(csv_path))[0] + ".m3u8"
+            base = os.path.splitext(os.path.basename(csv_path))[0]
+            # specific format: [Spotify] Title Cased With Spaces
+            formatted_name = base.replace("_", " ").title()
+            default_name = f"[Spotify] {formatted_name}.m3u8"
+            
             name = Prompt.ask("Playlist Name", default=default_name)
             
             # Auto-append extension
@@ -261,6 +268,95 @@ def run_deduplicator(root_path, dry_run=False):
         if result['path']:
              console.print(f"Saved to: [bold]{result['path']}[/bold]")
 
+def run_import_deduplicator(root_path, dry_run=False):
+    console.print("[bold blue]== Module F: Import Deduplicator (Folder Stager) ==[/bold blue]")
+    console.print(f"Main Library: [yellow]{root_path}[/yellow]")
+    
+    source_path = Prompt.ask("Enter Importer Source Folder (e.g. USB Stick)").strip().strip("'").strip('"')
+    if not os.path.exists(source_path):
+         console.print("[red]Source path not found![/red]")
+         return
+
+    cleaner = CleanModule(dry_run=dry_run)
+    
+    # 0. Optional: Run Prefix Remover on Source
+    if Confirm.ask("Run Prefix Remover on Source Folder first? (Removes '01 - ')", default=False):
+        renamer = RenamerModule(dry_run=dry_run)
+        mapping = renamer.scan(source_path)
+        if mapping:
+            console.print(f"[yellow]Found {len(mapping)} files to rename in Source.[/yellow]")
+            if Confirm.ask("Proceed with renaming in Source?"):
+                res = renamer.execute()
+                for r in res: console.print(r)
+        else:
+            console.print("[dim]No files to rename found.[/dim]")
+    
+    # 1. Ask for Comparison Method
+    comp_choice = questionary.select(
+        "Comparison Method:",
+        choices=[
+            "1. Deep Hash (Exact Content Match)",
+            "2. Filename (Match 'Song.mp3' to '01 - Song.mp3')"
+        ]
+    ).ask()
+    
+    comparison = 'hash' if comp_choice.startswith('1') else 'filename'
+    
+    # 2. Run Scan
+    duplicates = cleaner.scan_import(source_path, root_path, comparison=comparison)
+    
+    count = len(duplicates)
+    if count == 0:
+        console.print("[green]No duplicates found in source! You are good to import.[/green]")
+        return
+        
+    console.print(f"\n[red]Found {count} duplicates in source folder.[/red]")
+    
+    # 3. Ask for Action
+    action = questionary.select(
+        f"How do you want to handle these {count} files?",
+        choices=[
+            "a) Delete from Source (Keep Lib version)",
+            "b) Move to _ALREADY_IN_LIB folder",
+            "c) View list of duplicates",
+            "d) Cancel"
+        ]
+    ).ask()
+    
+    if action.startswith('c)'):
+        # View list logic could be added here, currently just printing top 10
+        console.print("First 10 duplicates:")
+        for d in duplicates[:10]:
+             console.print(f" - {d}")
+        if len(duplicates) > 10:
+             console.print(f"... and {len(duplicates)-10} more.")
+             
+        # Ask again? For now just exit or recursively call? 
+        # Simpler to just re-prompt action, but for MVP let's just loop or exit.
+        if not Confirm.ask("Proceed to action?"):
+            return
+            
+        # Re-ask action (simplified for now, assume they want to proceed after viewing)
+        action = questionary.select(
+            "Action:",
+            choices=["a) Delete", "b) Move", "d) Cancel"]
+        ).ask()
+    
+    if action.startswith('d)'):
+        return
+
+    scan_mode = 'delete' if action.startswith('a') else 'move'
+
+    if scan_mode == 'delete' and not Confirm.ask(f"Are you sure you want to DELETE {count} files from source?", default=False):
+        return
+
+    # 4. Resolve
+    results = cleaner.resolve_import_duplicates(duplicates, source_path, mode=scan_mode)
+    
+    for res in results:
+        console.print(res)
+    console.print(f"[green]Cleaned {len(results)} files from source.[/green]")
+
 def main():
     parser = argparse.ArgumentParser(description="DJ Library Manager")
     parser.add_argument("--root", help="Root directory of music library")
@@ -285,7 +381,8 @@ def main():
                 "3) Playlist Sync (CSV to M3U)",
                 "4) Prefix Remover (01 - Song.mp3 -> Song.mp3)",
                 "5) CSV Deduplicator (Remove owned tracks from CSV)",
-                "6) Full Auto-Mode (Run 1, 2, 3)",
+                "6) Import Deduplicator (Clean external folder against Library)",
+                "7) Full Auto-Mode (Run 1, 2, 3)",
                 "q) Quit"
             ]
         ).ask()
@@ -301,6 +398,8 @@ def main():
         elif choice.startswith("5)"):
             run_deduplicator(root_path, args.dry_run)
         elif choice.startswith("6)"):
+            run_import_deduplicator(root_path, args.dry_run)
+        elif choice.startswith("7)"):
             run_cleaner(root_path, args.dry_run)
             run_doctor(root_path, args.dry_run)
             run_matcher(root_path, args.dry_run)

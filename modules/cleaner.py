@@ -185,3 +185,104 @@ class CleanModule:
                     results.append(f"[ERROR] Failed to {action} {file_path}: {e}")
                     
         return results
+
+    def scan_import(self, source_path, library_path, comparison='hash'):
+        """
+        Scans source_path for files that exist in library_path.
+        comparison: 'hash' (content) or 'filename' (normalized name)
+        Returns list of duplicate file paths in source_path.
+        """
+        import re
+        # 1. Index Library
+        library_fingerprints = set()
+        
+        # Regex for filename normalization
+        pattern = re.compile(r"^\d+\s*-\s*")
+        
+        def normalize(name):
+            match = pattern.match(name)
+            if match:
+                return name[len(match.group(0)):].lower()
+            return name.lower()
+
+        with Progress() as progress:
+            task = progress.add_task("[cyan]Indexing library...", total=None)
+            total_files = sum([len(files) for r, d, files in os.walk(library_path)])
+            progress.update(task, total=total_files)
+            
+            for root, _, files in os.walk(library_path):
+                for file in files:
+                    if file.startswith('.'):
+                        continue
+                        
+                    file_path = os.path.join(root, file)
+                    try:
+                        if comparison == 'hash':
+                            fingerprint = self._get_file_hash(file_path)
+                        else: # filename
+                            fingerprint = normalize(file)
+                            
+                        library_fingerprints.add(fingerprint)
+                        progress.advance(task)
+                    except:
+                        continue
+                        
+        # 2. Scan Source
+        duplicates_found = []
+        with Progress() as progress:
+            task = progress.add_task(f"[magenta]Scanning import folder ({comparison})...", total=None)
+            total_source = sum([len(files) for r, d, files in os.walk(source_path)])
+            progress.update(task, total=total_source)
+            
+            for root, _, files in os.walk(source_path):
+                for file in files:
+                    if file.startswith('.'):
+                        continue
+                        
+                    file_path = os.path.join(root, file)
+                    try:
+                        if comparison == 'hash':
+                            fingerprint = self._get_file_hash(file_path)
+                        else:
+                            fingerprint = normalize(file)
+                            
+                        if fingerprint in library_fingerprints:
+                            duplicates_found.append(file_path)
+                        progress.advance(task)
+                    except:
+                        continue
+                        
+        return duplicates_found
+
+    def resolve_import_duplicates(self, duplicates, source_path, mode='delete'):
+        """
+        Deletes or moves the list of duplicate files.
+        """
+        results = []
+        trash_dir = os.path.join(source_path, "_ALREADY_IN_LIB")
+        
+        if mode == 'move' and not os.path.exists(trash_dir):
+            os.makedirs(trash_dir, exist_ok=True)
+            
+        for file_path in duplicates:
+            action = "Deleted" if mode == 'delete' else "Moved"
+            if self.dry_run:
+                results.append(f"[DRY-RUN] Would {action}: {file_path}")
+                continue
+                
+            try:
+                if mode == 'delete':
+                    os.remove(file_path)
+                    results.append(f"Deleted: {file_path}")
+                elif mode == 'move':
+                    dest = os.path.join(trash_dir, os.path.basename(file_path))
+                    # Handle name collision
+                    if os.path.exists(dest):
+                         base, ext = os.path.splitext(dest)
+                         dest = f"{base}_{self._get_file_hash(file_path)[:8]}{ext}"
+                    shutil.move(file_path, dest)
+                    results.append(f"Moved: {file_path} -> {dest}")
+            except Exception as e:
+                results.append(f"[ERROR] {file_path}: {e}")
+                
+        return results

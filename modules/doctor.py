@@ -15,7 +15,11 @@ class HealthGuard:
         flac_files = []
         
         # Collect FLAC files
-        for root, _, files in os.walk(root_path):
+        ignored_folders = {'_CORRUPT_FILES', '_DUPLICATES_TRASH', '_ALREADY_IN_LIB'}
+        for root, dirs, files in os.walk(root_path):
+            # Modify dirs in-place to skip ignored folders
+            dirs[:] = [d for d in dirs if d not in ignored_folders and not d.startswith('.')]
+            
             for file in files:
                 if file.startswith('.'):
                     continue
