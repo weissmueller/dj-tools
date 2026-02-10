@@ -13,6 +13,7 @@ from modules.doctor import HealthGuard
 from modules.matcher import MatchMaker
 from modules.renamer import RenamerModule
 from modules.scraper import BeatportScraper
+from modules.analyzer import QualityAnalyzer
 
 console = Console()
 
@@ -419,6 +420,30 @@ def run_scraper(root_path):
     console.print(f"[green]Saved to: {save_path}[/green]")
 
 
+def run_analyzer(root_path):
+    console.print("[bold blue]== Module H: Audio Quality Analyzer ==[/bold blue]")
+    analyzer = QualityAnalyzer()
+    
+    results = analyzer.scan(root_path)
+    if not results:
+        return
+
+    # Show stats
+    analyzer.generate_report(results)
+    
+    # Export?
+    if Confirm.ask("Export detailed CSV report?", default=False):
+        timestamp = os.path.basename(root_path) + "_quality_report.csv"
+        default_name = timestamp
+        filename = Prompt.ask("Report Filename", default=default_name)
+        
+        if not filename.endswith('.csv'):
+            filename += ".csv"
+            
+        analyzer.export_csv(results, filename)
+
+
+
 def main():
     parser = argparse.ArgumentParser(description="DJ Library Manager")
     parser.add_argument("--root", help="Root directory of music library")
@@ -445,7 +470,8 @@ def main():
                 "5) CSV Deduplicator (Remove owned tracks from CSV)",
                 "6) Import Deduplicator (Clean external folder against Library)",
                 "7) Import Beatport Top 100",
-                "8) Full Auto-Mode (Run 1, 2, 3)",
+                "8) Analyze Audio Quality (Bitrate/Format Report)",
+                "9) Full Auto-Mode (Run 1, 2, 3)",
                 "q) Quit"
             ]
         ).ask()
@@ -465,6 +491,8 @@ def main():
         elif choice.startswith("7)"):
             run_scraper(root_path)
         elif choice.startswith("8)"):
+            run_analyzer(root_path)
+        elif choice.startswith("9)"):
             run_cleaner(root_path, args.dry_run)
             run_doctor(root_path, args.dry_run)
             run_matcher(root_path, args.dry_run)

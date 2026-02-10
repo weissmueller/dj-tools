@@ -6,3 +6,4 @@ soundfile
 types-requests
 requests
 beautifulsoup4
+mutagen
