@@ -193,9 +193,19 @@ def run_matcher(root_path, dry_run=False):
         if Confirm.ask("Save M3U8 playlist?"):
             # Default name based on CSV filename
             base = os.path.splitext(os.path.basename(csv_path))[0]
-            # specific format: [Spotify] Title Cased With Spaces
+            
+            # Determine prefix
+            prefix = "[Spotify]"
+            if "beatport" in base.lower() or "chart" in base.lower():
+                prefix = "[Beatport]"
+                # Remove 'beatport' from base name to avoid particular "[Beatport] Beatport ..."
+                import re
+                base = re.sub(r'beatport', '', base, flags=re.IGNORECASE).strip()
+                base = re.sub(r'\s+', ' ', base).strip() # clean double spaces
+            
+            # specific format: [Prefix] Title Cased With Spaces
             formatted_name = base.replace("_", " ").title()
-            default_name = f"[Spotify] {formatted_name}.m3u8"
+            default_name = f"{prefix} {formatted_name}.m3u8"
             
             name = Prompt.ask("Playlist Name", default=default_name)
             

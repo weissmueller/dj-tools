@@ -7,3 +7,4 @@ types-requests
 requests
 beautifulsoup4
 mutagen
+urllib3<2.0.0
