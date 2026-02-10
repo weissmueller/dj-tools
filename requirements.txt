@@ -4,3 +4,5 @@ pandas
 thefuzz
 soundfile
 types-requests
+requests
+beautifulsoup4

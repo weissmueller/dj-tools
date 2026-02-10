@@ -12,6 +12,7 @@ from modules.cleaner import CleanModule
 from modules.doctor import HealthGuard
 from modules.matcher import MatchMaker
 from modules.renamer import RenamerModule
+from modules.scraper import BeatportScraper
 
 console = Console()
 
@@ -357,6 +358,67 @@ def run_import_deduplicator(root_path, dry_run=False):
         console.print(res)
     console.print(f"[green]Cleaned {len(results)} files from source.[/green]")
 
+def run_scraper(root_path):
+    console.print("[bold blue]== Module G: Beatport Scraper ==[/bold blue]")
+    
+    url = Prompt.ask("Enter Beatport Top 100 URL").strip()
+    if not url:
+        return
+        
+    scraper = BeatportScraper()
+    
+    # Ask about mix name preference
+    include_mix = Confirm.ask("Append Mix Name to Track Title? (e.g. 'Song (Extended Mix)')", default=True)
+    
+    console.print("[cyan]Scraping data...[/cyan]")
+    result = scraper.scrape(url, include_mix_name=include_mix)
+    
+    if "error" in result:
+        console.print(f"[red]Error:[/red] {result['error']}")
+        return
+        
+    df = result['df']
+    original_count = len(df)
+    
+    # 2. Deduplicate if necessary (Keep highest rank)
+    df.drop_duplicates(subset=['Track Name', 'Artist Name(s)'], keep='first', inplace=True)
+    count = len(df)
+    
+    removed = original_count - count
+    if removed > 0:
+        console.print(f"[yellow]Removed {removed} duplicates (likely different mixes of same track).[/yellow]")
+
+    genre = result['genre']
+    
+    console.print(f"[green]Successfully scraped {count} tracks from {genre} Top 100![/green]")
+    
+    # Show preview
+    console.print("\n[bold]Preview (First 5):[/bold]")
+    table = df[['Track Name', 'Artist Name(s)']].head(5).to_string(index=False)
+    console.print(table)
+    
+    # Filename suggestion
+    default_filename = f"Beatport Top 100 {genre}.csv"
+    # Removing any unsafe characters for filename
+    default_filename = "".join([c for c in default_filename if c.isalpha() or c.isdigit() or c in (' ', '-', '_')]).strip() + ".csv"
+    
+    filename = Prompt.ask("Save as:", default=default_filename)
+    if not filename.endswith('.csv'):
+        filename += ".csv"
+        
+    # Save options: Examples folder or current dir
+    # Default to examples for organization? Or just current dir. 
+    # Let's verify 'examples' exists
+    save_path = filename
+    examples_dir = os.path.join(os.getcwd(), "examples")
+    if os.path.exists(examples_dir):
+        if Confirm.ask(f"Save to 'examples/' folder?", default=True):
+            save_path = os.path.join(examples_dir, filename)
+            
+    df.to_csv(save_path, index=False, quoting=1) # quote all
+    console.print(f"[green]Saved to: {save_path}[/green]")
+
+
 def main():
     parser = argparse.ArgumentParser(description="DJ Library Manager")
     parser.add_argument("--root", help="Root directory of music library")
@@ -382,7 +444,8 @@ def main():
                 "4) Prefix Remover (01 - Song.mp3 -> Song.mp3)",
                 "5) CSV Deduplicator (Remove owned tracks from CSV)",
                 "6) Import Deduplicator (Clean external folder against Library)",
-                "7) Full Auto-Mode (Run 1, 2, 3)",
+                "7) Import Beatport Top 100",
+                "8) Full Auto-Mode (Run 1, 2, 3)",
                 "q) Quit"
             ]
         ).ask()
@@ -400,6 +463,8 @@ def main():
         elif choice.startswith("6)"):
             run_import_deduplicator(root_path, args.dry_run)
         elif choice.startswith("7)"):
+            run_scraper(root_path)
+        elif choice.startswith("8)"):
             run_cleaner(root_path, args.dry_run)
             run_doctor(root_path, args.dry_run)
             run_matcher(root_path, args.dry_run)
