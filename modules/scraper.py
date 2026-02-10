@@ -65,6 +65,31 @@ class BeatportScraper:
             
         # Parse tracks into list of dicts
         parsed_tracks = []
+        track_list_name = "Unknown Playlist"
+
+        # Try to find the name in the queries
+        # Often it's in the same query as the results, or a separate one for 'track-list' details
+        try:
+             for q in queries:
+                state_data = q.get('state', {}).get('data', {})
+                if state_data:
+                    # Check for 'name' directly if it's the main object
+                    if 'name' in state_data and isinstance(state_data['name'], str):
+                        potential_name = state_data['name']
+                        if potential_name and potential_name != "Unknown":
+                            track_list_name = potential_name
+                            # Don't break immediately, might be a better one (e.g. strict playlist name vs genre)
+                            # But usually the one with 'results' is the best bet if it has a name.
+                            if 'results' in state_data:
+                                break
+                    # Fallback: check for 'genre' -> 'name'
+                    if 'genre' in state_data and 'name' in state_data['genre']:
+                        if track_list_name == "Unknown Playlist":
+                             track_list_name = f"Top 100 {state_data['genre']['name']}"
+
+        except:
+            pass
+            
         for t in track_list:
             # Extract basic info
             track_name = t.get('name', 'Unknown')
@@ -136,5 +161,6 @@ class BeatportScraper:
         return {
             "df": df,
             "genre": genre_name,
+            "name": track_list_name,
             "count": len(parsed_tracks)
         }

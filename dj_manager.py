@@ -14,6 +14,7 @@ from modules.matcher import MatchMaker
 from modules.renamer import RenamerModule
 from modules.scraper import BeatportScraper
 from modules.analyzer import QualityAnalyzer
+from modules.tagger import OneTaggerModule
 
 console = Console()
 
@@ -262,10 +263,12 @@ def _select_csv():
         return Prompt.ask("Path to Exportify CSV").strip().strip("'").strip('"')
     return selection
 
-def run_deduplicator(root_path, dry_run=False):
+def run_deduplicator(root_path, dry_run=False, csv_path=None):
     console.print("[bold blue]== Module E: CSV Deduplicator ==[/bold blue]")
     
-    csv_path = _select_csv()
+    if not csv_path:
+        csv_path = _select_csv()
+    
     if not csv_path: 
         return
 
@@ -409,9 +412,17 @@ def run_scraper(root_path):
     console.print(table)
     
     # Filename suggestion
-    default_filename = f"Beatport Top 100 {genre}.csv"
-    # Removing any unsafe characters for filename
-    default_filename = "".join([c for c in default_filename if c.isalpha() or c.isdigit() or c in (' ', '-', '_')]).strip() + ".csv"
+    raw_name = result.get('name', f"Beatport Top 100 {genre}")
+    
+    # Sanitization
+    # Allow alphanumeric, spaces, dashes, underscores, and maybe ampersands/parentheses if safe
+    # But usually just keep it simple.
+    import re
+    # Replace invalid chars with empty or underscore
+    sanitized = re.sub(r'[\\/*?:"<>|]', "", raw_name)
+    sanitized = sanitized.strip()
+    
+    default_filename = f"{sanitized}.csv"
     
     filename = Prompt.ask("Save as:", default=default_filename)
     if not filename.endswith('.csv'):
@@ -428,6 +439,8 @@ def run_scraper(root_path):
             
     df.to_csv(save_path, index=False, quoting=1) # quote all
     console.print(f"[green]Saved to: {save_path}[/green]")
+    
+    return save_path
 
 
 def run_analyzer(root_path):
@@ -451,6 +464,102 @@ def run_analyzer(root_path):
             filename += ".csv"
             
         analyzer.export_csv(results, filename)
+
+def run_tagger_flow(root_path, dry_run=False):
+    console.print("[bold blue]== Module I: OneTagger Auto-Tagging ==[/bold blue]")
+    
+    # Default path: Ask user, don't default to root unless they want
+    # Maybe default to Downloads or previous?
+    default_path = os.path.expanduser("~/Downloads")
+    
+    target_path = Prompt.ask("Enter folder path to tag", default=default_path).strip().strip("'").strip('"')
+    
+    if not os.path.exists(target_path):
+        console.print(f"[red]Path does not exist: {target_path}[/red]")
+        return
+
+    # Optional: Clean filenames first
+    if Confirm.ask("Clean filenames first? (Removes '01 - ' prefix)", default=True):
+        console.print("[cyan]Running Prefix Remover...[/cyan]")
+        renamer = RenamerModule(dry_run=dry_run)
+        mapping = renamer.scan(target_path)
+        
+        if mapping:
+            console.print(f"[yellow]Found {len(mapping)} files to rename.[/yellow]")
+            # Show preview
+            for old, new in list(mapping.items())[:5]:
+                 console.print(f" [dim]{os.path.basename(old)}[/dim] -> [cyan]{os.path.basename(new)}[/cyan]")
+                 
+            if Confirm.ask("Proceed with renaming?"):
+                renamer.execute()
+                console.print("[green]Renaming complete.[/green]")
+        else:
+            console.print("[dim]No files needed renaming.[/dim]")
+
+    # Run OneTagger
+    if Confirm.ask(f"Ready to run OneTagger on: [cyan]{target_path}[/cyan]?", default=True):
+        tagger = OneTaggerModule("onetagger_config.json")
+        # Check if helper config exists, if not maybe create it or user has to provide it?
+        # We created it in the previous step, so it should be there.
+        
+        tagger.run_tagger(target_path)
+
+def run_guided_workflow(root_path, dry_run=False):
+    console.print("[bold blue]== Module I: Guided Import Workflow ==[/bold blue]")
+    
+    # 1. Select Source
+    source = questionary.select(
+        "Introduction: Select your starting point:",
+        choices=[
+            "1. Spotify Playlist (I have an Exportify CSV)",
+            "2. Beatport/Chart (I have a URL)",
+            "Cancel"
+        ]
+    ).ask()
+    
+    if not source or source == "Cancel":
+        return
+
+    csv_path = None
+    
+    if source.startswith("2."):
+        # Beatport Flow: Scrape first
+        console.print("\n[bold]Step 1: Scrape Metadata[/bold]")
+        csv_path = run_scraper(root_path)
+        # Assuming scraper saved a file, we need to know where it is or ask user to pick it.
+        # run_scraper prompts for save path. Let's just ask user to select it in next step.
+        console.print("[dim]Now we will use that CSV to check for existing tracks.[/dim]")
+    
+    # 2. Match / Deduplicate CSV against Library
+    console.print("\n[bold]Step 2: Filter CSV (Remove owned tracks)[/bold]")
+    if Confirm.ask(f"Select CSV to filter against Library?{' (Auto-selected)' if csv_path else ''}", default=True):
+        # We can reuse _select_csv or logic from run_deduplicator but we want to RETURN the path/result
+        # The existing run_deduplicator prints to console. Let's just call it.
+        # Ideally we'd refactor run_deduplicator to return the cleaner CSV path, but for now:
+        run_deduplicator(root_path, dry_run, csv_path=csv_path)
+        
+        # User now has a "Clean" CSV (e.g., 'Playlist_missing.txt' or modified ID).
+        # Actually run_deduplicator saves a new CSV usually.
+    
+    # 3. External Action: Download
+    console.print("\n[bold]Step 3: Download Tracks[/bold]")
+    console.print("[yellow]ACTION REQUIRED:[/yellow] Use the filtered CSV list to download the tracks you need.")
+    console.print("Put them all into a [bold]single folder[/bold] (e.g. ~/Downloads/New_Tracks).")
+    
+    Prompt.ask("Press [Enter] when downloads are complete and ready to process...")
+    
+    # 4. Process Downloads
+    console.print("\n[bold]Step 4: Process Downloads (Clean & Tag)[/bold]")
+    # Reuse run_tagger_flow which handles path selection, cleaning (renaming), and tagging
+    run_tagger_flow(root_path, dry_run)
+    
+    # 5. Verify Import (Deduplicate Import)
+    console.print("\n[bold]Step 5: Verify Import (Double Checks)[/bold]")
+    if Confirm.ask("Check for accidentally downloaded duplicates (Hash check)?", default=True):
+        run_import_deduplicator(root_path, dry_run)
+        
+    console.print("\n[bold green]Workflow Complete![/bold green]")
+    console.print("Don't forget to move your tagged files to your main library if you haven't yet.")
 
 
 
@@ -481,7 +590,8 @@ def main():
                 "6) Import Deduplicator (Clean external folder against Library)",
                 "7) Import Beatport Top 100",
                 "8) Analyze Audio Quality (Bitrate/Format Report)",
-                "9) Full Auto-Mode (Run 1, 2, 3)",
+                "9) OneTagger Auto-Tagging (Clean & Tag)",
+                "10) Guided Import Workflow (Spotify/Beatport)",
                 "q) Quit"
             ]
         ).ask()
@@ -503,9 +613,9 @@ def main():
         elif choice.startswith("8)"):
             run_analyzer(root_path)
         elif choice.startswith("9)"):
-            run_cleaner(root_path, args.dry_run)
-            run_doctor(root_path, args.dry_run)
-            run_matcher(root_path, args.dry_run)
+            run_tagger_flow(root_path, args.dry_run)
+        elif choice.startswith("10)"):
+            run_guided_workflow(root_path, args.dry_run)
         elif choice.startswith("q)"):
             console.print("Bye!")
             sys.exit(0)

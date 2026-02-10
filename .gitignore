@@ -8,3 +8,5 @@ user-notes.md
 /examples
 debug_m4a.py
 verify_analyzer.py
+onetagger-cli
+onetagger_config.json
