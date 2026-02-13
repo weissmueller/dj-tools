@@ -154,12 +154,11 @@ def run_doctor(root_path, dry_run=False):
         for res in results:
             console.print(res)
 
-def run_matcher(root_path, dry_run=False):
+def run_matcher(root_path, dry_run=False, csv_path=None):
     console.print("[bold blue]== Module C: Matchmaker ==[/bold blue]")
     
-    console.print("[bold blue]== Module C: Matchmaker ==[/bold blue]")
-    
-    csv_path = _select_csv()
+    if not csv_path:
+        csv_path = _select_csv()
     if not csv_path:
         return
     
@@ -530,12 +529,24 @@ def run_guided_workflow(root_path, dry_run=False):
         # run_scraper prompts for save path. Let's just ask user to select it in next step.
         console.print("[dim]Now we will use that CSV to check for existing tracks.[/dim]")
     
+    elif source.startswith("1."):
+        # Spotify Flow
+        console.print("\n[bold]Step 1: Get Playlist CSV[/bold]")
+        console.print("1. Open Spotify App or Web Player: [link=https://open.spotify.com]https://open.spotify.com[/link]")
+        console.print("2. Go to Exportify: [link=https://exportify.app]https://exportify.app[/link]")
+        console.print("3. Login and Export your target playlist to CSV.")
+        console.print("[dim]The file should be saved in your Downloads folder.[/dim]")
+        
+        Prompt.ask("Press [Enter] when you have the CSV ready...")
+    
     # 2. Match / Deduplicate CSV against Library
     console.print("\n[bold]Step 2: Filter CSV (Remove owned tracks)[/bold]")
-    if Confirm.ask(f"Select CSV to filter against Library?{' (Auto-selected)' if csv_path else ''}", default=True):
-        # We can reuse _select_csv or logic from run_deduplicator but we want to RETURN the path/result
-        # The existing run_deduplicator prints to console. Let's just call it.
-        # Ideally we'd refactor run_deduplicator to return the cleaner CSV path, but for now:
+    
+    if not csv_path:
+        if Confirm.ask("Select CSV to filter against Library?", default=True):
+            csv_path = _select_csv()
+            
+    if csv_path:
         run_deduplicator(root_path, dry_run, csv_path=csv_path)
         
         # User now has a "Clean" CSV (e.g., 'Playlist_missing.txt' or modified ID).
@@ -557,6 +568,11 @@ def run_guided_workflow(root_path, dry_run=False):
     console.print("\n[bold]Step 5: Verify Import (Double Checks)[/bold]")
     if Confirm.ask("Check for accidentally downloaded duplicates (Hash check)?", default=True):
         run_import_deduplicator(root_path, dry_run)
+
+    # 6. Create M3U8
+    console.print("\n[bold]Step 6: Sync Playlist (Create M3U8)[/bold]")
+    if Confirm.ask("Create M3U8 playlist from original CSV?", default=True):
+         run_matcher(root_path, dry_run, csv_path=csv_path)
         
     console.print("\n[bold green]Workflow Complete![/bold green]")
     console.print("Don't forget to move your tagged files to your main library if you haven't yet.")
